@@ -2516,6 +2516,9 @@ async def apply_leave_alias(request: Request):
         except Exception as e:
             raise HTTPException(400, f"Invalid date format: {e}")
 
+        if start_dt < date.today():
+            raise HTTPException(400, "Start date cannot be in the past")
+
         if start_dt > end_dt:
             raise HTTPException(400, "End date must be after start date")
 
@@ -2554,59 +2557,34 @@ async def apply_leave_alias(request: Request):
                 manager_id    = manager_id    or fb_mgr_id
                 manager_email = manager_email or fb_mgr_email
 
-        # Detect whether MANAGER_ID column exists in EMP_NRM_LEAVE
+        # Calculate next LEAVE_ID
+        cursor.execute("SELECT NVL(MAX(LEAVE_ID), 0) + 1 FROM EMP_NRM_LEAVE")
+        max_id_row = cursor.fetchone()
+        new_leave_id = (max_id_row[0] if isinstance(max_id_row, (list, tuple)) else list(max_id_row.values())[0]) if max_id_row else 1
+
         cursor.execute(
             """
-            SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS
-            WHERE TABLE_SCHEMA = CURRENT_SCHEMA()
-              AND TABLE_NAME = 'EMP_NRM_LEAVE'
-              AND COLUMN_NAME = 'MANAGER_ID'
-            LIMIT 1
-            """
+            INSERT INTO EMP_NRM_LEAVE
+                (LEAVE_ID, EMPLOYEE_ID, LEAVE_TYPE, START_DATE, END_DATE, TOTAL_DAYS, REASON, STATUS, APPLIED_AT)
+            VALUES
+                (%s, %s, %s, TO_DATE(%s, 'YYYY-MM-DD'), TO_DATE(%s, 'YYYY-MM-DD'), %s, %s, 'Pending', SYSTIMESTAMP)
+            """,
+            (new_leave_id, employee_id, leave_type, start_date, end_date, total_days, reason),
         )
-        has_manager_id_col = cursor.fetchone() is not None
-
-        if has_manager_id_col:
-            cursor.execute(
-                """
-                INSERT INTO EMP_NRM_LEAVE
-                    (EMPLOYEE_ID, MANAGER_ID, LEAVE_TYPE, START_DATE, END_DATE,
-                     TOTAL_DAYS, REASON, STATUS, APPLIED_AT)
-                SELECT %s, jw.MANAGER_ID, %s, %s, %s, %s, %s, 'Pending', CURRENT_TIMESTAMP()
-                FROM EMP_NRM_JOB_WORK jw
-                WHERE jw.EMPLOYEE_ID = %s LIMIT 1
-                """,
-                (employee_id, leave_type, start_date, end_date, total_days, reason, employee_id),
-            )
-        else:
-            cursor.execute(
-                "INSERT INTO EMP_NRM_LEAVE (EMPLOYEE_ID, LEAVE_TYPE, START_DATE, END_DATE, TOTAL_DAYS, REASON, STATUS, APPLIED_AT) VALUES (%s, %s, %s, %s, %s, %s, 'Pending', CURRENT_TIMESTAMP())",
-                (employee_id, leave_type, start_date, end_date, total_days, reason),
-            )
         conn.commit()
 
         # Bust all leave caches so history shows immediately
         invalidate_leave(employee_id, manager_id)
 
-        # Fetch newly inserted leave_id for one-click email links
-        new_leave_id = 0
-        try:
-            cursor.execute(
-                "SELECT LEAVE_ID FROM EMP_NRM_LEAVE WHERE EMPLOYEE_ID = %s ORDER BY APPLIED_AT DESC LIMIT 1",
-                (employee_id,),
-            )
-            row = cursor.fetchone()
-            if row:
-                new_leave_id = row[0] if isinstance(row, (list, tuple)) else row.get("LEAVE_ID", 0)
-        except Exception:
-            pass
-
         if manager_email or employee_email:
-            _send_leave_email(manager_email or "", employee_name, start_date, end_date, reason,
-                              leave_id=new_leave_id, leave_type=leave_type,
-                              employee_email=employee_email)
+            try:
+                _send_leave_email(manager_email or "", employee_name, start_date, end_date, reason,
+                                  leave_id=new_leave_id, leave_type=leave_type,
+                                  employee_email=employee_email)
+            except Exception as mail_err:
+                print("⚠️ Email notification warning:", mail_err)
 
-        return {"success": True, "message": "Leave applied successfully"}
+        return {"success": True, "message": "Leave applied successfully", "leave_id": new_leave_id}
 
     except HTTPException:
         raise
@@ -2669,6 +2647,97 @@ async def leave_history_alias(employee_id: str):
         return result
     except Exception as e:
         raise HTTPException(500, str(e))
+    finally:
+        try:
+            if cursor: cursor.close()
+            if conn:   _emp_pool_return(conn)
+        except Exception:
+            pass
+
+
+# ══════════════════════════════════════════════════════════════
+# ROUTE: UPDATE PERSONAL DETAILS & LOGO
+# ══════════════════════════════════════════════════════════════
+
+@app.post("/api/employee/update-personal")
+async def update_employee_personal(request: Request):
+    """Update employee phone, address, and emergency contact details."""
+    conn = None
+    cursor = None
+    try:
+        data = await request.json()
+        employee_id = (data.get("employee_id") or "").strip().upper()
+        if not employee_id:
+            raise HTTPException(400, "employee_id is required")
+
+        phone                   = (data.get("phone")                   or "").strip()
+        current_address         = (data.get("current_address")         or "").strip()
+        permanent_address       = (data.get("permanent_address")       or "").strip()
+        emergency_contact_name  = (data.get("emergency_contact_name")  or "").strip()
+        emergency_contact_phone = (data.get("emergency_contact_phone") or "").strip()
+
+        conn = get_db_connection()
+        if not conn:
+            raise HTTPException(500, "DB connection failed")
+        cursor = conn.cursor()
+
+        update_parts = []
+        params = []
+        if phone:
+            update_parts.append("PHONE = %s"); params.append(phone)
+        if current_address:
+            update_parts.append("ADDRESS = %s"); params.append(current_address)
+        if permanent_address:
+            update_parts.append("PERSONAL_LOCATION = %s"); params.append(permanent_address)
+        if emergency_contact_name:
+            update_parts.append("EMERGENCY_CONTACT_NAME = %s"); params.append(emergency_contact_name)
+        if emergency_contact_phone:
+            update_parts.append("EMERGENCY_CONTACT_PHONE = %s"); params.append(emergency_contact_phone)
+
+        if update_parts:
+            params.append(employee_id)
+            sql = f"UPDATE EMPLOYEE_REGISTRATIONS SET {', '.join(update_parts)} WHERE EMPLOYEE_ID = %s"
+            cursor.execute(sql, tuple(params))
+            conn.commit()
+
+        # Invalidate profile cache
+        try:
+            redis_safe_delete(f"employee:{employee_id}")
+            redis_safe_delete(f"user:{employee_id}")
+        except Exception:
+            pass
+
+        return {"success": True, "message": "Personal details updated successfully"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(500, f"Failed to update personal details: {str(e)}")
+    finally:
+        try:
+            if cursor: cursor.close()
+            if conn:   _emp_pool_return(conn)
+        except Exception:
+            pass
+
+
+@app.get("/api/employee/logo")
+async def get_employee_portal_logo():
+    """Fetch official portal logo URL from SUPPORT.LOGOS table."""
+    conn = None
+    cursor = None
+    try:
+        conn = get_db_connection()
+        if not conn:
+            raise HTTPException(500, "DB connection failed")
+        cursor = conn.cursor(DictCursor)
+        cursor.execute("SELECT AWS_S3_URL FROM SUPPORT.LOGOS WHERE IS_ACTIVE = 1 AND (NAME = 'ChakoraHub' OR SNO = 1) LIMIT 1")
+        row = cursor.fetchone()
+        logo_url = None
+        if row:
+            logo_url = row.get("AWS_S3_URL") or row.get("aws_s3_url")
+        return {"success": True, "logo_url": logo_url}
+    except Exception as e:
+        return {"success": False, "logo_url": None, "error": str(e)}
     finally:
         try:
             if cursor: cursor.close()
