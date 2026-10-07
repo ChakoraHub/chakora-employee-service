@@ -1,0 +1,167 @@
+name: Deploy Employee Resources - Timesheet
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: employee-resources-timesheet-deploy
+  cancel-in-progress: false
+
+jobs:
+  enable-maintenance:
+    name: Enable maintenance mode
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Enable Employee Resources maintenance
+        env:
+          MAINTENANCE_ON_URL: ${{ secrets.EMPLOYEE_RESOURCES_MAINTENANCE_ON_URL }}
+        run: |
+          set -e
+          test -n "$MAINTENANCE_ON_URL" || {
+            echo "Missing EMPLOYEE_RESOURCES_MAINTENANCE_ON_URL secret"
+            exit 1
+          }
+
+          status=$(curl --silent --show-error --max-time 20 \
+            --output maintenance-on-response.txt \
+            --write-out "%{http_code}" \
+            --request POST \
+            "$MAINTENANCE_ON_URL" || true)
+
+          echo "[maintenance:on] HTTP status: $status"
+          cat maintenance-on-response.txt || true
+
+          if [ "$status" -lt 200 ] || [ "$status" -ge 300 ]; then
+            echo "Maintenance ON failed"
+            exit 1
+          fi
+
+  deploy:
+    name: Deploy Timesheet to EC2
+    runs-on: ubuntu-latest
+    needs: enable-maintenance
+
+    steps:
+      - name: SSH and deploy to Windows EC2
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.AWS_HOST }}
+          username: ${{ secrets.AWS_USERNAME }}
+          key: ${{ secrets.AWS_PRIVATE_KEY }}
+
+          script: |
+            set -e
+
+            cd "${{ secrets.APP_PATH }}"
+            echo "Working directory: $(pwd)"
+
+            echo "Fetching latest main branch..."
+            git fetch origin main
+            git checkout -f -B main origin/main
+
+            echo "Installing Python dependencies..."
+            "C:\Users\Administrator\AppData\Local\Programs\Python\Python313\python.exe" -m pip install -r requirements.txt
+
+            echo "Restarting Flask application..."
+            nssm restart FlaskApp
+
+            echo "Checking Flask service..."
+            nssm status FlaskApp
+
+  selenium-smoke-tests:
+    name: Selenium Smoke Tests
+    runs-on: ubuntu-latest
+    needs: deploy
+
+    env:
+      TIMESHEET_BASE_URL: https://www.chakorahub.com
+      EMPLOYEE_RESOURCES_URL: https://www.chakorahub.com/employee-resources
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install Chrome
+        uses: browser-actions/setup-chrome@v2
+        with:
+          chrome-version: "153.0.8010.52"
+          install-chromedriver: true
+
+      - name: Install Selenium test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install selenium pytest
+
+      - name: Wait for deployed Employee Resources page
+        run: |
+          set -e
+          for attempt in {1..12}; do
+            if curl --fail --silent --show-error --location --max-time 10 "$EMPLOYEE_RESOURCES_URL" > /dev/null; then
+              echo "Employee Resources is responding."
+              exit 0
+            fi
+            echo "Employee Resources not ready (attempt $attempt/12)."
+            sleep 10
+          done
+          echo "Employee Resources did not become ready."
+          exit 1
+
+      - name: Run Timesheet Selenium smoke tests
+        env:
+          EXPECT_MAINTENANCE_NOTICE: "true"
+          TIMESHEET_LOCAL_DEBUG_LOGIN: "true"
+        run: |
+          pytest -v employee_timesheet_smoke.py --junitxml=selenium-results.xml
+
+      - name: Upload Selenium results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: timesheet-selenium-results
+          path: selenium-results.xml
+          if-no-files-found: warn
+
+  disable-maintenance:
+    name: Disable maintenance after passing tests
+    runs-on: ubuntu-latest
+    needs: selenium-smoke-tests
+    if: ${{ needs.selenium-smoke-tests.result == 'success' }}
+
+    steps:
+      - name: Disable Employee Resources maintenance
+        env:
+          MAINTENANCE_OFF_URL: ${{ secrets.EMPLOYEE_RESOURCES_MAINTENANCE_OFF_URL }}
+        run: |
+          set -e
+          test -n "$MAINTENANCE_OFF_URL" || {
+            echo "Missing EMPLOYEE_RESOURCES_MAINTENANCE_OFF_URL secret"
+            exit 1
+          }
+
+          status=$(curl --silent --show-error --max-time 20 \
+            --output maintenance-off-response.txt \
+            --write-out "%{http_code}" \
+            --request POST \
+            "$MAINTENANCE_OFF_URL" || true)
+
+          echo "[maintenance:off] HTTP status: $status"
+          cat maintenance-off-response.txt || true
+
+          if [ "$status" -lt 200 ] || [ "$status" -ge 300 ]; then
+            echo "Maintenance OFF failed"
+            exit 1
+          fi
+
+          echo "Maintenance disabled successfully"
