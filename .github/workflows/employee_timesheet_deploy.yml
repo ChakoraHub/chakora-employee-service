@@ -59,7 +59,7 @@ jobs:
           script: |
             set -e
 
-            cd "${{ secrets.WEBSITE_APP_PATH }}"
+            cd "C:/vsrsubhash/chakorahub-website"
             echo "Working directory: $(pwd)"
 
             echo "Fetching latest main branch..."
