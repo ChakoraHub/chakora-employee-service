@@ -70,7 +70,7 @@ def test_employee_resources_opens(browser):
 
 
 def test_maintenance_notice_state(browser):
-    open_employee_resources(browser)
+    open_timesheet_section(browser)
     notice_id = "employee-resources-maintenance-notice"
 
     if EXPECT_MAINTENANCE_NOTICE:
