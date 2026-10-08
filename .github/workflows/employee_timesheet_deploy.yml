@@ -57,23 +57,14 @@ jobs:
           key: ${{ secrets.AWS_PRIVATE_KEY }}
 
           script: |
-            set -e
-
-            cd "C:/vsrsubhash/chakorahub-website"
-            echo "Working directory: $(pwd)"
-
-            echo "Fetching latest main branch..."
-            git fetch origin main
-            git checkout -f -B main origin/main
-
-            echo "Installing Python dependencies..."
-            "C:\Users\Administrator\AppData\Local\Programs\Python\Python313\python.exe" -m pip install -r requirements.txt
-
-            echo "Restarting Flask application..."
-            nssm restart FlaskApp
-
-            echo "Checking Flask service..."
-            nssm status FlaskApp
+            echo "Shell: $SHELL"
+            uname -a
+            whoami
+            pwd
+            ls -la /
+            ls -la /c 2>/dev/null || true
+            ls -la /mnt/c 2>/dev/null || true
+            ls -la "C:/" 2>/dev/null || true
 
   selenium-smoke-tests:
     name: Selenium Smoke Tests
