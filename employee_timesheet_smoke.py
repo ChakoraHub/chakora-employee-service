@@ -84,11 +84,31 @@ def test_maintenance_notice_state(browser):
             print("DEBUG found elements:", len(els))
             if els:
                 el = els[0]
-                print("DEBUG display:", el.value_of_css_property("display"))
-                print("DEBUG visibility:", el.value_of_css_property("visibility"))
-                print("DEBUG opacity:", el.value_of_css_property("opacity"))
-                print("DEBUG size:", el.size, "location:", el.location)
-                print("DEBUG outer:", el.get_attribute("outerHTML")[:400])
+                chain = browser.execute_script(
+                    """
+                    let el = arguments[0], out = [];
+                    while (el && el.nodeType === 1) {
+                      const cs = getComputedStyle(el);
+                      const r = el.getBoundingClientRect();
+                      out.push(
+                        el.tagName.toLowerCase()
+                        + (el.id ? '#' + el.id : '')
+                        + (el.className ? '.' + String(el.className).trim().split(/\\s+/).join('.') : '')
+                        + ' | display=' + cs.display
+                        + ' | visibility=' + cs.visibility
+                        + ' | w=' + Math.round(r.width)
+                        + ' | h=' + Math.round(r.height)
+                      );
+                      el = el.parentElement;
+                    }
+                    return out;
+                    """,
+                    el,
+                )
+                for line in chain:
+                    print("DEBUG chain:", line)
+                print("DEBUG parent html:", browser.execute_script(
+                    "return arguments[0].parentElement.outerHTML.slice(0, 500)", el))
             raise
 
         notice = browser.find_element(By.ID, notice_id)
