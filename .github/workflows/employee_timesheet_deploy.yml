@@ -59,7 +59,7 @@ jobs:
           script: |
             set -e
 
-            cd "${{ secrets.APP_PATH }}"
+            cd "${{ secrets.WEBSITE_APP_PATH }}"
             echo "Working directory: $(pwd)"
 
             echo "Fetching latest main branch..."
