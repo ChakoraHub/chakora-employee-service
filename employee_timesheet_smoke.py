@@ -71,14 +71,32 @@ def test_employee_resources_opens(browser):
 
 def test_maintenance_notice_state(browser):
     open_employee_resources(browser)
-    notice = browser.find_elements(By.ID, "employee-resources-maintenance-notice")
+    notice_id = "employee-resources-maintenance-notice"
 
     if EXPECT_MAINTENANCE_NOTICE:
-        assert notice, "Maintenance is expected to be ON, but the notice was not found."
-        assert notice[0].is_displayed()
-        assert "Scheduled maintenance notice" in notice[0].text
+        try:
+            WebDriverWait(browser, WAIT).until(
+                EC.visibility_of_element_located((By.ID, notice_id))
+            )
+        except Exception:
+            els = browser.find_elements(By.ID, notice_id)
+            print("DEBUG url:", browser.current_url)
+            print("DEBUG found elements:", len(els))
+            if els:
+                el = els[0]
+                print("DEBUG display:", el.value_of_css_property("display"))
+                print("DEBUG visibility:", el.value_of_css_property("visibility"))
+                print("DEBUG opacity:", el.value_of_css_property("opacity"))
+                print("DEBUG size:", el.size, "location:", el.location)
+                print("DEBUG outer:", el.get_attribute("outerHTML")[:400])
+            raise
+
+        notice = browser.find_element(By.ID, notice_id)
+        assert "Scheduled maintenance notice" in notice.text
     else:
-        assert not notice, "Maintenance is expected to be OFF, but the notice is present."
+        assert not browser.find_elements(By.ID, notice_id), (
+            "Maintenance is expected to be OFF, but the notice is present."
+        )
 
 
 def test_timesheet_section_opens(browser):
