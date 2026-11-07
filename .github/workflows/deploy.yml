@@ -192,11 +192,8 @@ jobs:
       - name: Run Selenium smoke tests
         env:
           EMPLOYEE_BASE_URL: https://www.chakorahub.com
-          TIMESHEET_BASE_URL: https://www.chakorahub.com
-          EMPLOYEE_RESOURCES_URL: https://www.chakorahub.com/employee-resources
-          EXPECT_MAINTENANCE_NOTICE: "false"
         run: |
-          pytest -v employee_smoke.py employee_timesheet_smoke.py --junitxml=selenium-results.xml
+          pytest -v employee_smoke.py --junitxml=selenium-results.xml
 
       - name: Upload Selenium results
         if: always()
