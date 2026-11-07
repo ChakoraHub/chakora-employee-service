@@ -19,6 +19,7 @@ BASE_URL = os.getenv(
 
 EMP_LEAVE_URL = f"{BASE_URL}/emp-leave"
 EMP_DETAILS_URL = f"{BASE_URL}/employee/personal-details"
+EMP_SALARY_URL = f"{BASE_URL}/employee/salary"
 EMP_IDCARD_URL = f"{BASE_URL}/employee-idcard"
 ADMIN_LEAVE_URL = f"{BASE_URL}/admin-leave-approval"
 HEALTH_URL = f"{BASE_URL}/health"
@@ -130,6 +131,18 @@ def test_employee_personal_details_page_rendered(driver):
         EC.presence_of_element_located((By.CSS_SELECTOR, "form, input, table, .container, body"))
     )
     assert content is not None, "Personal details page container not rendered"
+
+
+def test_employee_salary_page_rendered(driver):
+    """Verify employee salary portal renders successfully."""
+    driver.get(EMP_SALARY_URL)
+    wait_loaded(driver)
+
+    body = WebDriverWait(driver, WAIT).until(
+        EC.presence_of_element_located((By.TAG_NAME, "body"))
+    )
+    assert body is not None, "Salary page body not found"
+    assert driver.title != "", "Page title is empty"
 
 
 def test_employee_idcard_page_rendered(driver):
